@@ -4,6 +4,7 @@ module Main where
 
 import Graphics.GL
 import qualified Graphics.UI.SDL as SDL
+import           Graphics.UI.SDL.Enum as SDL
 import Foreign
 import Foreign.C
 import Control.Monad (unless)
@@ -18,55 +19,73 @@ import Util
 
 deriving instance Ord SDL.Keysym
 
+data Game 
+  = Game
+    { runProgram :: GLuint
+    , gameValue :: GLfloat }
+
+initialGameState :: Game
+initialGameState = Game 0 1.0
+
 main :: IO ()
 main = do
-  let createWindow t =
-        SDL.createWindow t 0 0 800 600 SDL.SDL_WINDOW_SHOWN
-      title = "Eric's Dragon Quest"
 
-  SDL.init SDL.SDL_INIT_EVERYTHING
-  window <- withCString title createWindow
-  
-  -- screenSurface <- SDL.getWindowSurface window
-  -- pixelFormat <- peek screenSurface
-  -- color <- SDL.mapRGB (SDL.surfaceFormat pixelFormat) 0xFF 0xFF 0xFF
-  -- SDL.fillRect screenSurface nullPtr color
-  -- SDL.updateWindowSurface window
+  SDL.init SDL_INIT_EVERYTHING
 
-  SDL.glSetAttribute SDL.SDL_GL_CONTEXT_PROFILE_MASK SDL.SDL_GL_CONTEXT_PROFILE_CORE
-  SDL.glSetAttribute SDL.SDL_GL_CONTEXT_MAJOR_VERSION 3
-  SDL.glSetAttribute SDL.SDL_GL_CONTEXT_MINOR_VERSION 2
+  window <- withCString "gl and sdl2 basics" $ \t ->
+    SDL.createWindow t 0 0 800 600 SDL_WINDOW_SHOWN
 
-  SDL.glSetAttribute SDL.SDL_GL_DOUBLEBUFFER 1
-  SDL.glSetAttribute SDL.SDL_GL_DEPTH_SIZE 24
+  SDL.glSetAttribute SDL_GL_CONTEXT_PROFILE_MASK SDL_GL_CONTEXT_PROFILE_CORE
+  SDL.glSetAttribute SDL_GL_CONTEXT_MAJOR_VERSION 3
+  SDL.glSetAttribute SDL_GL_CONTEXT_MINOR_VERSION 2
+
+  SDL.glSetAttribute SDL_GL_DOUBLEBUFFER 1
+  SDL.glSetAttribute SDL_GL_DEPTH_SIZE 24
 
   renderer <- SDL.glCreateContext window
-  
-  -- SDL.delay 5000
 
-  initResources
-  loop window Set.empty
+  game <- initResources initialGameState
+  
+  loop window Set.empty game
 
   SDL.glDeleteContext renderer
   SDL.destroyWindow window
   SDL.quit
 
-loop :: SDL.Window -> Set SDL.Keysym -> IO ()
-loop window keys = do
+loop :: SDL.Window -> Set SDL.Keysym -> Game -> IO ()
+loop window keys game = do
   keys' <- parseEvents keys
+  game' <- updateGame game keys'
+  
+  draw window keys' game'
+  
+  unless (Set.member escapeKey keys') $
+    loop window keys' game'
 
+updateGame :: Game -> Set SDL.Keysym -> IO Game
+updateGame game keys = return . newGame $ Set.foldr check (gameValue game) keys
+  where check (SDL.Keysym _ k _) acc
+          | k == SDLK_UP = acc + 0.01
+          | k == SDLK_DOWN = acc - 0.01
+          | otherwise = acc
+        newGame v = game { gameValue = v }
+
+draw :: SDL.Window -> Set SDL.Keysym -> Game -> IO ()
+draw window keys game = do
+
+  -- Uniforms
+  uniColor <- withCString "triangleColor" $ glGetUniformLocation (runProgram game)
+  glUniform3f uniColor 0 0 (gameValue game)
+  
   -- Draw
-  glClearColor 0.0 0.0 0.0 1.0
+  glClearColor 0 0 0 1
   glClear GL_COLOR_BUFFER_BIT
   glDrawArrays GL_TRIANGLES 0 3
   
   SDL.glSwapWindow window
-  
-  unless (Set.member escapeKey keys') $
-    loop window keys'
 
 escapeKey :: SDL.Keysym
-escapeKey = SDL.Keysym SDL.SDL_SCANCODE_ESCAPE SDL.SDLK_ESCAPE SDL.KMOD_NONE
+escapeKey = SDL.Keysym SDL_SCANCODE_ESCAPE SDLK_ESCAPE KMOD_NONE
 
 parseEvents :: Set SDL.Keysym -> IO (Set SDL.Keysym)
 parseEvents keys = do
@@ -85,11 +104,11 @@ parseEvents keys = do
 
      case event of
 
-      SDL.KeyboardEvent SDL.SDL_KEYUP _ _ _ _ k ->
-        parseEvents (Set.insert k keys)
-
-      SDL.KeyboardEvent SDL.SDL_KEYDOWN _ _ _ _ k ->
+      SDL.KeyboardEvent SDL_KEYUP _ _ _ _ k ->
         parseEvents (Set.delete k keys)
+
+      SDL.KeyboardEvent SDL_KEYDOWN _ _ _ _ k ->
+        parseEvents (Set.insert k keys)
 
       SDL.QuitEvent{} ->
         parseEvents (Set.insert escapeKey keys)
@@ -103,16 +122,17 @@ vertices =
   , -0.5, -0.5
   ]
 
-initResources = do
+initResources :: Game -> IO Game
+initResources game = do
 
   -- VAO
-  vao <- overPtr (glGenVertexArrays 1)
+  vao <- overPtr $ glGenVertexArrays 1
   glBindVertexArray vao
   
   -- VBO
-  vbo <- overPtr (glGenBuffers 1)
+  vbo <- overPtr $ glGenBuffers 1
   glBindBuffer GL_ARRAY_BUFFER vbo
-  let size = fromIntegral $ length vertices * sizeOf (1.0 :: Float)
+  let size = fromIntegral $ length vertices * sizeOf (1.0 :: GLfloat)
   withArray vertices $ \ptr ->
     glBufferData GL_ARRAY_BUFFER size (castPtr ptr) GL_STATIC_DRAW
 
@@ -135,4 +155,6 @@ initResources = do
 
   -- Uniforms
   uniColor <- withCString "triangleColor" $ glGetUniformLocation program
-  glUniform3f uniColor 1.0 0.0 0.0
+  glUniform3f uniColor 0 0 1
+
+  return $ game { runProgram = program }
